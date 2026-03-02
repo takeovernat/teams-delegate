@@ -2,8 +2,6 @@
 """
 teams-delegate auth — Microsoft Graph OAuth2 device code flow.
 Usage: python3 auth.py [--client-id YOUR_CLIENT_ID]
-
-Stores token at ~/.teams-delegate/token.json
 """
 
 import json
@@ -12,6 +10,7 @@ import sys
 import time
 import urllib.request
 import urllib.parse
+import urllib.error
 
 TOKEN_DIR = os.path.expanduser("~/.teams-delegate")
 TOKEN_FILE = os.path.join(TOKEN_DIR, "token.json")
@@ -77,7 +76,7 @@ def refresh_token(token_data, client_id):
         "scope": " ".join(SCOPES),
     }).encode()
     req = urllib.request.Request(
-        "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+        "https://login.microsoftonline.com/consumers/oauth2/v2.0/token",
         data=data,
         method="POST"
     )
@@ -97,12 +96,24 @@ def device_code_flow(client_id):
         "scope": " ".join(SCOPES),
     }).encode()
     req = urllib.request.Request(
-        "https://login.microsoftonline.com/common/oauth2/v2.0/devicecode",
+        "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode",
         data=data,
         method="POST"
     )
-    with urllib.request.urlopen(req) as resp:
-        device = json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req) as resp:
+            device = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        print(f"\nDevice code request failed (HTTP {e.code}):", file=sys.stderr)
+        print(body, file=sys.stderr)
+        try:
+            parsed = json.loads(body)
+            print(f"\nError: {parsed.get('error')}", file=sys.stderr)
+            print(f"Description: {parsed.get('error_description', '')}", file=sys.stderr)
+        except Exception:
+            pass
+        sys.exit(1)
 
     print(f"\n{device['message']}\n")
 
@@ -118,7 +129,7 @@ def device_code_flow(client_id):
     while time.time() < expires:
         time.sleep(interval)
         req = urllib.request.Request(
-            "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+            "https://login.microsoftonline.com/consumers/oauth2/v2.0/token",
             data=poll_data,
             method="POST"
         )
@@ -137,7 +148,7 @@ def device_code_flow(client_id):
                 interval += 5
                 continue
             else:
-                print(f"Auth error: {err}", file=sys.stderr)
+                print(f"Auth error: {err} — {body.get('error_description', '')}", file=sys.stderr)
                 sys.exit(1)
 
     print("Authentication timed out.", file=sys.stderr)
