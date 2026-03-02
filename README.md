@@ -2,7 +2,7 @@
 
 > Delegate your Microsoft Teams inbox to your AI agent. Auto-reply, summarize, and filter messages so you only see what actually needs your attention.
 
-Built by **Natnael Teshome** | [GitHub](https://github.com/takeovernat) | [stellarsites.ai](https://stellarsites.ai)
+Built by **Nate Teshome** | [GitHub](https://github.com/takeovernat) | [stellarsitesai.com](https://stellarsitesai.com)
 
 ## Install
 
