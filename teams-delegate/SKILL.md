@@ -68,3 +68,14 @@ When user says "handle my Teams" or "auto-reply while I'm out":
 
 ## Graph API Reference
 See references/graph-api.md for full endpoint docs, auth scopes, and rate limit details.
+
+---
+
+## Author
+
+Built by **Natnael Teshome** — [@takeovernat](https://github.com/takeovernat)
+
+Website: [stellarsites.ai](https://stellarsites.ai) *(coming soon)*
+GitHub: [github.com/takeovernat](https://github.com/takeovernat)
+
+Found a bug or want to contribute? Open an issue or PR on [GitHub](https://github.com/takeovernat/teams-delegate).
