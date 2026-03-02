@@ -1,201 +1,91 @@
 #!/usr/bin/env python3
 """
-teams-delegate auth — Microsoft Graph OAuth2 device code flow.
-Usage: python3 auth.py [--client-id YOUR_CLIENT_ID]
+teams-delegate auth via MSAL.
+Usage:
+  python3 auth.py --client-id YOUR_CLIENT_ID   # first time
+  python3 auth.py                               # re-auth/refresh
 """
+import json, os, sys, argparse
+import msal
 
-import json
-import os
-import sys
-import time
-import urllib.request
-import urllib.parse
-import urllib.error
-
-TOKEN_DIR = os.path.expanduser("~/.teams-delegate")
-TOKEN_FILE = os.path.join(TOKEN_DIR, "token.json")
+TOKEN_DIR   = os.path.expanduser("~/.teams-delegate")
+TOKEN_CACHE = os.path.join(TOKEN_DIR, "token_cache.bin")
 CONFIG_FILE = os.path.join(TOKEN_DIR, "config.json")
+GRAPH_BASE  = "https://graph.microsoft.com/v1.0"
 
-SCOPES = [
-    "Chat.Read",
-    "Chat.ReadWrite",
-    "ChannelMessage.Read.All",
-    "ChannelMessage.Send",
-    "Presence.Read.All",
-    "User.Read",
-    "offline_access",
-]
-
-GRAPH_BASE = "https://graph.microsoft.com/v1.0"
-
+SCOPES = ["Chat.Read","Chat.ReadWrite","ChannelMessage.Read.All",
+          "ChannelMessage.Send","Presence.Read.All","User.Read"]
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE) as f:
-            return json.load(f)
+        with open(CONFIG_FILE) as f: return json.load(f)
     return {}
 
-
-def save_config(config):
+def save_config(cfg):
     os.makedirs(TOKEN_DIR, exist_ok=True)
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f, indent=2)
+    with open(CONFIG_FILE, "w") as f: json.dump(cfg, f, indent=2)
 
+def get_app(client_id):
+    cache = msal.SerializableTokenCache()
+    if os.path.exists(TOKEN_CACHE):
+        cache.deserialize(open(TOKEN_CACHE).read())
+    app = msal.PublicClientApplication(
+        client_id,
+        authority="https://login.microsoftonline.com/organizations",
+        token_cache=cache)
+    return app, cache
 
-def save_token(token_data):
+def save_cache(cache):
     os.makedirs(TOKEN_DIR, exist_ok=True)
-    token_data["saved_at"] = time.time()
-    with open(TOKEN_FILE, "w") as f:
-        json.dump(token_data, f, indent=2)
-    os.chmod(TOKEN_FILE, 0o600)
+    if cache.has_state_changed:
+        open(TOKEN_CACHE, "w").write(cache.serialize())
 
-
-def load_token():
-    if not os.path.exists(TOKEN_FILE):
-        return None
-    with open(TOKEN_FILE) as f:
-        return json.load(f)
-
-
-def is_token_valid(token_data):
-    if not token_data:
-        return False
-    saved_at = token_data.get("saved_at", 0)
-    expires_in = token_data.get("expires_in", 3600)
-    return (time.time() - saved_at) < (expires_in - 60)
-
-
-def refresh_token(token_data, client_id):
-    refresh_tok = token_data.get("refresh_token")
-    if not refresh_tok:
-        return None
-    data = urllib.parse.urlencode({
-        "client_id": client_id,
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_tok,
-        "scope": " ".join(SCOPES),
-    }).encode()
-    req = urllib.request.Request(
-        "https://login.microsoftonline.com/consumers/oauth2/v2.0/token",
-        data=data,
-        method="POST"
-    )
-    try:
-        with urllib.request.urlopen(req) as resp:
-            new_token = json.loads(resp.read())
-            save_token(new_token)
-            return new_token
-    except Exception as e:
-        print(f"Token refresh failed: {e}", file=sys.stderr)
-        return None
-
-
-def device_code_flow(client_id):
-    data = urllib.parse.urlencode({
-        "client_id": client_id,
-        "scope": " ".join(SCOPES),
-    }).encode()
-    req = urllib.request.Request(
-        "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode",
-        data=data,
-        method="POST"
-    )
-    try:
-        with urllib.request.urlopen(req) as resp:
-            device = json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()
-        print(f"\nDevice code request failed (HTTP {e.code}):", file=sys.stderr)
-        print(body, file=sys.stderr)
-        try:
-            parsed = json.loads(body)
-            print(f"\nError: {parsed.get('error')}", file=sys.stderr)
-            print(f"Description: {parsed.get('error_description', '')}", file=sys.stderr)
-        except Exception:
-            pass
-        sys.exit(1)
-
-    print(f"\n{device['message']}\n")
-
-    poll_data = urllib.parse.urlencode({
-        "client_id": client_id,
-        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-        "device_code": device["device_code"],
-    }).encode()
-
-    interval = device.get("interval", 5)
-    expires = time.time() + device.get("expires_in", 900)
-
-    while time.time() < expires:
-        time.sleep(interval)
-        req = urllib.request.Request(
-            "https://login.microsoftonline.com/consumers/oauth2/v2.0/token",
-            data=poll_data,
-            method="POST"
-        )
-        try:
-            with urllib.request.urlopen(req) as resp:
-                token = json.loads(resp.read())
-                save_token(token)
-                print("Authentication complete.")
-                return token
-        except urllib.error.HTTPError as e:
-            body = json.loads(e.read())
-            err = body.get("error", "")
-            if err == "authorization_pending":
-                continue
-            elif err == "slow_down":
-                interval += 5
-                continue
-            else:
-                print(f"Auth error: {err} — {body.get('error_description', '')}", file=sys.stderr)
-                sys.exit(1)
-
-    print("Authentication timed out.", file=sys.stderr)
-    sys.exit(1)
-
-
-def get_valid_token():
-    config = load_config()
-    client_id = config.get("client_id")
+def get_token():
+    cfg = load_config()
+    client_id = cfg.get("client_id")
     if not client_id:
-        print("No client_id configured. Run: python3 auth.py --client-id YOUR_CLIENT_ID", file=sys.stderr)
+        print("Run: python3 auth.py --client-id YOUR_CLIENT_ID", file=sys.stderr)
         sys.exit(1)
+    app, cache = get_app(client_id)
+    accounts = app.get_accounts()
+    if accounts:
+        result = app.acquire_token_silent(SCOPES, account=accounts[0])
+        if result and "access_token" in result:
+            save_cache(cache)
+            return result["access_token"]
+    flow = app.initiate_device_flow(scopes=SCOPES)
+    if "user_code" not in flow:
+        print(f"Device flow failed: {flow.get('error_description')}", file=sys.stderr)
+        sys.exit(1)
+    print(flow["message"])
+    print(f"\nCode expires in {flow.get('expires_in', 900)} seconds — go NOW.")
+    result = app.acquire_token_by_device_flow(flow)
+    if "access_token" not in result:
+        print(f"Auth failed: {result.get('error_description')}", file=sys.stderr)
+        sys.exit(1)
+    save_cache(cache)
+    print("Authentication complete.")
+    return result["access_token"]
 
-    token = load_token()
-    if is_token_valid(token):
-        return token["access_token"]
-
-    if token and token.get("refresh_token"):
-        refreshed = refresh_token(token, client_id)
-        if refreshed:
-            return refreshed["access_token"]
-
-    token = device_code_flow(client_id)
-    return token["access_token"]
-
-
-def graph_get(path, access_token):
+import urllib.request
+def graph_get(path, token):
     req = urllib.request.Request(
         f"{GRAPH_BASE}{path}",
-        headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
-    )
-    with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read())
-
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
+    with urllib.request.urlopen(req) as r: return json.loads(r.read())
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--client-id", help="Azure app client ID")
-    args = parser.parse_args()
-
+    p = argparse.ArgumentParser()
+    p.add_argument("--client-id")
+    args = p.parse_args()
     if args.client_id:
-        config = load_config()
-        config["client_id"] = args.client_id
-        save_config(config)
-        print(f"Client ID saved.")
-
-    token = get_valid_token()
-    me = graph_get("/me", token)
-    print(f"Authenticated as: {me.get('displayName')} ({me.get('mail') or me.get('userPrincipalName')})")
+        cfg = load_config()
+        cfg["client_id"] = args.client_id
+        save_config(cfg)
+        print("Client ID saved.")
+    token = get_token()
+    try:
+        me = graph_get("/me", token)
+        print(f"Authenticated as: {me.get('displayName')} ({me.get('mail') or me.get('userPrincipalName')})")
+    except Exception as e:
+        print(f"Auth successful. /me check: {e}")
