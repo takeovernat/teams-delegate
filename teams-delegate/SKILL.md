@@ -11,6 +11,8 @@ Let the agent own your Teams inbox. Read messages, draft replies, send them — 
 
 1. Register an Azure app at https://portal.azure.com → Azure Active Directory → App Registrations → New
    - Platform: Mobile/Desktop (enables device code flow)
+   - In Authentication → scroll to "Advanced settings" → set "Allow public client flows" to Yes (required for device code)
+   - NOTE: Use the old Azure portal experience — click "switch to old experience" in the yellow banner if you see it
    - Add API permissions: Chat.Read, Chat.ReadWrite, ChannelMessage.Read.All, ChannelMessage.Send, Presence.Read.All, User.Read
    - Grant admin consent if on a corporate tenant
 
